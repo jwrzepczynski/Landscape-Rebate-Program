@@ -1,0 +1,181 @@
+# Final Project
+
+# Set up
+rm(list=ls())
+
+# Load Packages
+library(sf)
+library(tidyverse)
+library(tmap)
+library(lwgeom)
+library(dplyr)
+library(ggmap)
+library(tidycensus)
+library(tigris)
+
+# Set Working Directory
+setwd("~/Desktop/ENVS117")
+
+# Load in data
+sites <- read_csv("SitesCSV2.csv")
+geocoded <- read_csv("GeocodeResults-2.csv")
+cities <-st_read("Cities")
+
+# Remove Cities that are not in cost sharing areas to create cost sharing cities
+cscities <- filter(cities, NAME %in% c("MILPITAS", "MORGAN HILL", "PALO ALTO", "SANTA CLARA", "CUPERTINO"))
+
+# Create Project Site Points
+# Join geocoded with sites
+merged <- merge(geocoded, sites, by = "FullAddress")
+
+# Clean up Sites CSV
+sites <- filter(sites, Rebate_Status == "Check Issued")
+geocoded <- filter(sites, Rebate_Status == "Check Issued")
+merged <- filter(merged, Rebate_Status == "Check Issued")
+
+# Clean up merge
+merged <- drop_na(merged, Status)
+
+# Only Rebates for landscape
+lsites <- filter(merged, RebateType %in% c("L",
+                                           "LD",
+                                           "LDI",
+                                           "LDIW",
+                                           "LI",
+                                           "LIW",
+                                           "LR",
+                                           "LRI",
+                                           "LRIW",
+                                           "LRW",
+                                           "LW"))
+#All Points
+sites2 <- merged
+
+# Project 
+sites_point <- st_as_sf(lsites, coords = c("Long", "Lat"), crs = 4269)
+sites_point <- st_transform(sites_point, crs = 2227)
+
+# Plot Site Locations
+tmap_mode("view")
+qtm <- tm_shape(sites_point) +tm_dots()+ tm_basemap(server = "CartoDB.Positron") 
+qtm
+
+# Cost Sharing
+# Remove Cities that are not in cost sharing areas to create cost sharing cities
+cscities <- filter(cities, NAME %in% c("MILPITAS", "MORGAN HILL", "PALO ALTO", "SANTA CLARA", "CUPERTINO"))
+
+# How many sites in cost sharing areas?
+cslsites <- filter(lsites, City %in% c("MILPITAS", "MORGAN HILL", "PALO ALTO", "SANTA CLARA", "CUPERTINO"))
+cslsites
+                   
+# Load in Census Data
+census_api_key("ff69ecc8bbe04182ce81f86e69df6cb2ad637508", install = TRUE)
+variables <- load_variables(2018, "acs5")
+
+# Median Household income
+med_income <- get_acs(geography = "tract",
+              year = 2018,
+              variables = "B19013_001", #A14001
+              state = "CA",
+              county = "Santa Clara",
+              output = "wide",
+              geometry = "true")
+med_income <- rename(med_income, census_tract = GEOID)
+med_income <- rename(med_income, med_household_income = B19013_001E)
+med_income <- rename(med_household_income_error = B19013_001M)
+
+# Race 
+race_vars <- c(White = "B03002_003",
+               Black = "B03002_004",
+               Native = "B03002_005",
+               Asian = "B03002_006",
+               HIPI = "B03002_007",
+               Hispanic = "B03002_012")
+race <- get_acs(geography = "tract",
+                year = 2018,
+                variables = race_vars,
+                summary_var = "B02001_001",
+                state = "CA",
+                county = "Santa Clara",
+                geometry = "true")
+
+race_pct <- race %>%
+  mutate(pct = 100 * (estimate / summary_est)) %>%  
+  select(NAME, variable, pct)
+pct_minority <- race_pct %>%
+  mutate(pct2 = 100 - pct) %>%
+  filter(variable == "White")
+
+# Home Value
+home_val_vars <- c(total = "B25075_001",
+                   median_val = "B25077_001",
+                   u10k = "B25075_002",
+                   u15k = "B25075_003",
+                   u20k = "B25075_004",
+                   u25k = "B25075_005",
+                   u30k = "B25075_006",
+                   u35k = "B25075_007",
+                   u40k = "B25075_008",
+                   u50k = "B25075_009",
+                   u60k = "B25075_010",
+                   u70k = "B25075_011",
+                   u80k = "B25075_012",
+                   u90k = "B25075_013",
+                   u100k = "B25075_014",
+                   u125k = "B25075_015",
+                   u150k = "B25075_016",
+                   u175k = "B25075_017",
+                   u200k = "B25075_018",
+                   u250k = "B25075_019",
+                   u300k = "B25075_020",
+                   u400k = "B25075_021",
+                   u500k = "B25075_022",
+                   u750k = "B25075_023",
+                   u1000k = "B25075_024",
+                   u1500k = "B25075_025",
+                   u2000k = "B25075_026",
+                   g2000k = "B25075_027")
+
+home_val <- get_acs(geography = "tract",
+                year = 2018,
+                variables = home_val_vars,
+                state = "CA",
+                county = "Santa Clara",
+                output = "wide",
+                geometry = "true")
+
+# Plot Data 
+# Map of Median Income
+med_inc_map <- tm_shape(med_income) + tm_fill(title = "Median Household Income", col = "med_household_income", palette = "Reds", n=4, style = "quantile") +
+  tm_shape(sites_point) +tm_dots()
+med_inc_map
+
+# Map of Race - (Where pct2 is the percent of nonwhite residents)
+race_map <- tm_shape(pct_minority) + tm_polygons(title = "Percent of Minority Residents", col = "pct2", palette = "Reds", legend.reverse = TRUE)+
+                tm_shape(sites_point) +tm_dots()
+race_map
+
+# Map of Home Value
+home_value <- tm_shape(home_val) +tm_polygons(title = "Median Home Value", col = "median_valE", palette = "Reds")+
+  tm_shape(sites_point) + tm_dots()
+home_value
+
+# Map of Cost Sharing Cities
+citiesmap <- tm_shape(cities)+tm_polygons(col = "NAME", legend.show = FALSE) + tm_shape(cscities)+tm_borders(col = "Red", lwd = 2)
+citiesmap
+
+
+# Join points and tracts to determine where sites are with race
+pct_minority <- st_transform(pct_minority, crs = 2227)
+race_join <- st_join(sites_point, pct_minority)
+# plot race as histogram
+ggplot(race_join, aes(x = pct2))+geom_histogram(breaks = seq(0,100,by=20))+
+  stat_bin(breaks = seq(0,100,by=20), geom="text", aes(label=..count..), vjust = -0.5)+
+  theme_classic()+
+  labs(x = "Percent Minority Residents", y = "Number of Census Tracts", title = "Percent Minority Residents By Census Tract in Santa Clara County, CA")
+
+# Join income and points
+med_income <- st_transform(med_income, crs = 2227)
+inc_join <- st_join(sites_point, med_income)
+inc_join2 <- filter(inc_join, med_household_income > 118101)
+
